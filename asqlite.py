@@ -89,14 +89,14 @@ class _ContextManagerMixin:
     async def _runner(self):
         future = self._worker.post(self.func, *self.args, **self.kwargs)
         if self.timeout is not None:
-            ret = await asyncio.wait_for(future, timeout=timeout)
+            ret = await asyncio.wait_for(future, timeout=self.timeout)
         else:
             ret = await future
         self.__result = result = self._factory(ret)
         return result
 
     def __await__(self):
-        return self._runner.__await__()
+        return self._runner().__await__()
 
     async def __aenter__(self):
         return await self._runner()
@@ -246,12 +246,12 @@ class _ConnectHandler:
     async def _runner(self):
         future = self._worker.post(sqlite3.connect, self.database, **self.kwargs)
         self._worker.start()
-        conn = await asyncio.wait_for(future, timeout=timeout)
+        conn = await asyncio.wait_for(future, timeout=self.timeout)
         self.__internal_conn = result = Connection(conn, self._worker)
         return result
 
     def __await__(self):
-        return self._runner.__await__()
+        return self._runner().__await__()
 
     async def __aenter__(self):
         return await self._runner()
