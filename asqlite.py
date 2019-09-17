@@ -29,6 +29,9 @@ import threading
 import queue
 import asyncio
 
+PARSE_DECLTYPES = sqlite3.PARSE_DECLTYPES
+PARSE_COLNAMES = sqlite3.PARSE_COLNAMES
+
 class _WorkerEntry:
     __slots__ = ('func', 'args', 'kwargs', 'future', 'cancelled')
 
@@ -99,7 +102,11 @@ class _ContextManagerMixin:
         return self._runner().__await__()
 
     async def __aenter__(self):
-        return await self._runner()
+        ret = await self._runner()
+        try:
+            return await ret.__aenter__()
+        except AttributeError:
+            return ret
 
     async def __aexit__(self, exc_type, exc, tb):
         if self.__result is not None:
@@ -137,7 +144,9 @@ class Cursor:
 
     async def execute(self, sql, *parameters):
         """Asynchronous version of :meth:`sqlite3.Cursor.execute`."""
-        return await self._post(self._cursor.execute, sql, *parameters)
+        if len(parameters) == 1 and isinstance(parameters[0], (dict, tuple)):
+            parameters = parameters[0]
+        return await self._post(self._cursor.execute, sql, parameters)
 
     async def executemany(self, sql, seq_of_parameters):
         """Asynchronous version of :meth:`sqlite3.Cursor.executemany`."""
@@ -160,6 +169,36 @@ class Cursor:
         """Asynchronous version of :meth:`sqlite3.Cursor.fetchall`."""
         return await self._post(self._cursor.fetchall)
 
+class Transaction:
+    """An asyncio-compatible transaction for sqlite3.
+
+    This can be used as a context manager as well.
+    """
+    def __init__(self, conn):
+        self.conn = conn
+
+    async def start(self):
+        """Starts the transaction."""
+        await self.conn.execute('BEGIN TRANSACTION;')
+
+    async def rollback(self):
+        """Exits the transaction and doesn't save."""
+        await self.conn.rollback()
+
+    async def commit(self):
+        """Saves the transaction."""
+        await self.conn.commit()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        if exc_type is None:
+            # no error
+            await self.commit()
+        else:
+            await self.rollback()
+
 class Connection:
     """An asyncio-compatible version of :class:`sqlite3.Connection`.
 
@@ -169,10 +208,12 @@ class Connection:
 
         For a saner API, :attr:`sqlite3.Connection.row_factory`
         is automatically set to :class:`sqlite3.Row`.
+
+        Along with :attr:`sqlite3.Connection.isolation_level`
+        set to ``None`` and the journal_mode is set to ``WAL``.
     """
     def __init__(self, connection, queue):
         self._conn = connection
-        connection.row_factory = sqlite3.Row
         self._queue = queue
         self._post = queue.post
 
@@ -185,6 +226,13 @@ class Connection:
     def get_connection(self):
         """Retrieves the internal :class:`sqlite3.Connection` object."""
         return self._conn
+
+    def transaction(self):
+        """Gets a transaction object.
+
+        This can be used similarly to ``asyncpg.Transaction``.
+        """
+        return Transaction(self)
 
     def cursor(self):
         """Asynchronous version of :meth:`sqlite3.Connection.cursor`.
@@ -206,61 +254,66 @@ class Connection:
         """Asynchronous version of :meth:`sqlite3.Connection.commit`."""
         return await self._post(self._conn.commit)
 
+    async def rollback(self):
+        """Asynchronous version of :meth:`sqlite3.Connection.rollback`."""
+        return await self._post(self._conn.rollback)
+
     async def close(self):
         """Asynchronous version of :meth:`sqlite3.Connection.close`."""
         await self._post(self._conn.close)
         self._queue.stop()
 
-    async def execute(self, sql, *parameters):
+    def execute(self, sql, *parameters):
         """Asynchronous version of :meth:`sqlite3.Connection.execute`.
 
         Note that this returns a :class:`Cursor` instead of a :class:`sqlite3.Cursor`.
         """
-        cursor = await self._post(self._conn.execute, sql, *parameters)
-        return Cursor(self, cursor)
+        if len(parameters) == 1 and isinstance(parameters[0], (dict, tuple)):
+            parameters = parameters[0]
 
-    async def executemany(self, sql, seq_of_parameters):
+        factory = lambda cur: Cursor(self, cur)
+        return _ContextManagerMixin(self._queue, factory, self._conn.execute, sql, parameters)
+
+    def executemany(self, sql, seq_of_parameters):
         """Asynchronous version of :meth:`sqlite3.Connection.executemany`.
 
         Note that this returns a :class:`Cursor` instead of a :class:`sqlite3.Cursor`.
         """
-        cursor = await self._post(self._conn.executemany, sql, seq_of_parameters)
-        return Cursor(self, cursor)
+        factory = lambda cur: Cursor(self, cur)
+        return _ContextManagerMixin(self._queue, factory, self._conn.executemany, sql, seq_of_parameters)
 
-    async def executescript(self, sql_script):
+    def executescript(self, sql_script):
         """Asynchronous version of :meth:`sqlite3.Connection.executescript`.
 
         Note that this returns a :class:`Cursor` instead of a :class:`sqlite3.Cursor`.
         """
-        cursor = await self._post(self._conn.executescript, sql_script)
-        return Cursor(self._conn, cursor)
+        factory = lambda cur: Cursor(self, cur)
+        return _ContextManagerMixin(self._queue, factory, self._conn.executescript, sql, sql_script)
 
-class _ConnectHandler:
-    def __init__(self, database, *, timeout=None, loop=None, **kwargs):
-        self._worker = _Worker(loop=loop)
-        self.database = database
-        self.timeout = timeout
-        self.kwargs = kwargs
-        self.__internal_conn = None
+    async def fetchone(self, query, *parameters):
+        """Shortcut method version of :meth:`sqlite3.Cursor.fetchone` without making a cursor."""
+        async with self.execute(query, *parameters) as cursor:
+            return await cursor.fetchone()
 
-    async def _runner(self):
-        future = self._worker.post(sqlite3.connect, self.database, **self.kwargs)
-        self._worker.start()
-        conn = await asyncio.wait_for(future, timeout=self.timeout)
-        self.__internal_conn = result = Connection(conn, self._worker)
-        return result
+    async def fetchmany(self, query, *parameters, size=None):
+        """Shortcut method version of :meth:`sqlite3.Cursor.fetchmany` without making a cursor."""
+        async with self.execute(query, *parameters) as cursor:
+            return await cursor.fetchmany(size)
 
-    def __await__(self):
-        return self._runner().__await__()
+    async def fetchall(self, query, *parameters):
+        """Shortcut method version of :meth:`sqlite3.Cursor.fetchall` without making a cursor."""
+        async with self.execute(query, *parameters) as cursor:
+            return await cursor.fetchall()
 
-    async def __aenter__(self):
-        return await self._runner()
+def _connect_pragmas(db, **kwargs):
+    connection = sqlite3.connect(db, **kwargs)
+    connection.execute('pragma journal_mode=wal')
+    connection.execute('pragma foreign_keys=ON')
+    connection.isolation_level = None
+    connection.row_factory = sqlite3.Row
+    return connection
 
-    async def __aexit__(self, exc_type, exc, tb):
-        if self.__internal_conn is not None:
-            await self.__internal_conn.close()
-
-def connect(database, *, timeout=None, loop=None, **kwargs):
+def connect(database, *, init=None, timeout=None, loop=None, **kwargs):
     """asyncio-compatible version of :func:`sqlite3.connect`.
 
     This can be used as a regular coroutine or in an async-with statement.
@@ -281,10 +334,23 @@ def connect(database, *, timeout=None, loop=None, **kwargs):
             ...
 
     Resolves to a :class:`Connection` object.
+
+    A special keyword-only parameter named ``init`` can be passed which allows
+    one to customize the :class:`sqlite3.Connection` before it is converted
+    to a :class:`Connection` object.
     """
     loop = loop or asyncio.get_event_loop()
     queue = _Worker(loop=loop)
     queue.start()
     def factory(con):
         return Connection(con, queue)
-    return _ContextManagerMixin(queue, factory, sqlite3.connect, database, timeout=timeout, **kwargs)
+
+    if init is not None:
+        def new_connect(db, **kwargs):
+            con = _connect_pragmas(db, **kwargs)
+            init(con)
+            return con
+    else:
+        new_connect = _connect_pragmas
+
+    return _ContextManagerMixin(queue, factory, new_connect, database, timeout=timeout, **kwargs)
