@@ -190,6 +190,7 @@ class Transaction:
         await self.conn.commit()
 
     async def __aenter__(self):
+        await self.start()
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
@@ -198,6 +199,30 @@ class Transaction:
             await self.commit()
         else:
             await self.rollback()
+
+class _CursorWithTransaction(Cursor):
+    async def start(self):
+        await self._conn.execute('BEGIN TRANSACTION;')
+
+    async def rollback(self):
+        await self._conn.rollback()
+
+    async def commit(self):
+        await self._conn.commit()
+
+    async def __aenter__(self):
+        await self.start()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        try:
+            if exc_type is None:
+                # no error
+                await self.commit()
+            else:
+                await self.rollback()
+        finally:
+            await self.close()
 
 class Connection:
     """An asyncio-compatible version of :class:`sqlite3.Connection`.
@@ -234,11 +259,16 @@ class Connection:
         """
         return Transaction(self)
 
-    def cursor(self):
+    def cursor(self, *, transaction=False):
         """Asynchronous version of :meth:`sqlite3.Connection.cursor`.
 
         Much like :func:`connect` this can be used as both a coroutine
         and an asynchronous context manager.
+
+        Parameters
+        ------------
+        transaction: bool
+            Whether to open a transaction as well, defaults to False.
 
         Returns
         --------
@@ -247,7 +277,11 @@ class Connection:
         """
 
         def factory(cur):
-            return Cursor(self, cur)
+            if transaction:
+                return _CursorWithTransaction(self, cur)
+            else:
+                return Cursor(self, cur)
+
         return _ContextManagerMixin(self._queue, factory, self._conn.cursor)
 
     async def commit(self):
@@ -288,7 +322,7 @@ class Connection:
         Note that this returns a :class:`Cursor` instead of a :class:`sqlite3.Cursor`.
         """
         factory = lambda cur: Cursor(self, cur)
-        return _ContextManagerMixin(self._queue, factory, self._conn.executescript, sql, sql_script)
+        return _ContextManagerMixin(self._queue, factory, self._conn.executescript, sql_script)
 
     async def fetchone(self, query, *parameters):
         """Shortcut method version of :meth:`sqlite3.Cursor.fetchone` without making a cursor."""
