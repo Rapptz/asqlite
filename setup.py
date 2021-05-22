@@ -21,7 +21,7 @@ setup(
     description='A simple and easy to use async wrapper for sqlite3.',
     long_description=readme,
     long_description_content_type='text/markdown',
-    include_data_package=True,
+    include_package_data=True,
     python_requires='>=3.5.3',
     classifiers=[
         'License :: OSI Approved :: MIT License',
