@@ -29,6 +29,8 @@ import threading
 import queue
 import asyncio
 
+__version__ = '1.0.0'
+
 PARSE_DECLTYPES = sqlite3.PARSE_DECLTYPES
 PARSE_COLNAMES = sqlite3.PARSE_COLNAMES
 
