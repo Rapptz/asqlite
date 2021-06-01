@@ -110,7 +110,7 @@ class _ContextManagerMixin:
 
     async def __aexit__(self, exc_type, exc, tb):
         if self.__result is not None:
-            await self.__result.close()
+            await self.__result.__aexit__(exc_type, exc, tb)
 
 class Cursor:
     """An asyncio-compatible version of :class:`sqlite3.Cursor`.
