@@ -148,15 +148,18 @@ class Cursor:
         """Asynchronous version of :meth:`sqlite3.Cursor.execute`."""
         if len(parameters) == 1 and isinstance(parameters[0], (dict, tuple)):
             parameters = parameters[0]
-        return await self._post(self._cursor.execute, sql, parameters)
+        await self._post(self._cursor.execute, sql, parameters)
+        return self
 
     async def executemany(self, sql, seq_of_parameters):
         """Asynchronous version of :meth:`sqlite3.Cursor.executemany`."""
-        return await self._post(self._cursor.executemany, sql, seq_of_parameters)
+        await self._post(self._cursor.executemany, sql, seq_of_parameters)
+        return self
 
     async def executescript(self, sql_script):
         """Asynchronous version of :meth:`sqlite3.Cursor.executescript`."""
-        return await self._post(self._cursor.executescript, sql_script)
+        await self._post(self._cursor.executescript, sql_script)
+        return self
 
     async def fetchone(self):
         """Asynchronous version of :meth:`sqlite3.Cursor.fetchone`."""
