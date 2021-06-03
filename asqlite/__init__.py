@@ -140,20 +140,20 @@ class Cursor:
         if not self._to_run:
             return self
 
-        queue = self._to_run.copy()
-        self._to_run.clear()
+        try:
+            # Cursor creation is postponed until here so only one await is
+            # needed when chaining methods
+            if self._cursor is None:
+                self._cursor = await self._post(self._conn._conn.cursor)
 
-        # Cursor creation is postponed until here so only one await is
-        # needed when chaining methods
-        if self._cursor is None:
-            self._cursor = await self._post(self._conn._conn.cursor)
+            for meth, *args in self._to_run:
+                if isinstance(meth, str):
+                    meth = getattr(self._cursor, meth)
+                ret = await self._post(meth, *args)
 
-        for meth, *args in queue:
-            if isinstance(meth, str):
-                meth = getattr(self._cursor, meth)
-            ret = await self._post(meth, *args)
-
-        return ret
+            return ret
+        finally:
+            self._to_run.clear()
 
     def get_cursor(self):
         """Retrieves the internal :class:`sqlite3.Cursor` object."""
