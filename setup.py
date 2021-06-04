@@ -17,6 +17,7 @@ setup(
     },
     version=version,
     packages=['asqlite'],
+    package_data={'asqlite': ['py.typed']},
     license='MIT',
     description='A simple and easy to use async wrapper for sqlite3.',
     long_description=readme,
