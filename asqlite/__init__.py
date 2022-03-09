@@ -56,7 +56,7 @@ PARSE_DECLTYPES = sqlite3.PARSE_DECLTYPES
 PARSE_COLNAMES = sqlite3.PARSE_COLNAMES
 
 T = TypeVar('T')
-U = TypeVar('U', covariant=True)
+U = TypeVar('U', covariant=True, bound=AsyncContextManager[Any])
 
 
 class _WorkerEntry:
@@ -112,7 +112,7 @@ class _ContextManagerMixin(Generic[T, U]):
     def __init__(
         self,
         _queue: _Worker,
-        _factory: Callable[[T], AsyncContextManager[U]],
+        _factory: Callable[[T], U],
         func: Callable[..., Any],
         *args: Any,
         timeout: Optional[float] = None,
@@ -121,12 +121,12 @@ class _ContextManagerMixin(Generic[T, U]):
         self._worker: _Worker = _queue
         self.func: Callable[..., Any] = func
         self.timeout: Optional[float] = timeout
-        self._factory: Callable[[T], AsyncContextManager[U]] = _factory
+        self._factory: Callable[[T], U] = _factory
         self.args: Tuple[Any, ...] = args
         self.kwargs: Dict[str, Any] = kwargs
-        self.__result: Optional[AsyncContextManager[U]] = None
+        self.__result: Optional[U] = None
 
-    async def _runner(self) -> AsyncContextManager[U]:
+    async def _runner(self) -> U:
         future = self._worker.post(self.func, *self.args, **self.kwargs)
         if self.timeout is not None:
             ret = await asyncio.wait_for(future, timeout=self.timeout)
@@ -135,7 +135,7 @@ class _ContextManagerMixin(Generic[T, U]):
         self.__result = result = self._factory(ret)
         return result
 
-    def __await__(self) -> Generator[Any, None, AsyncContextManager[U]]:
+    def __await__(self) -> Generator[Any, None, U]:
         return self._runner().__await__()
 
     async def __aenter__(self) -> U:
