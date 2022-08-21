@@ -192,18 +192,18 @@ class Cursor:
         return await self._post(self._cursor.close)
 
     @overload
-    async def execute(self: C, sql: str, parameter: Dict[str, Any]) -> C:
+    async def execute(self: C, sql: str, parameter: Dict[str, Any], /) -> C:
         ...
 
     @overload
-    async def execute(self: C, sql: str, parameter: Tuple[Any, ...]) -> C:
+    async def execute(self: C, sql: str, parameter: Tuple[Any, ...], /) -> C:
         ...
 
     @overload
-    async def execute(self: C, sql: str, *parameters: Any) -> C:
+    async def execute(self: C, sql: str, /, *parameters: Any) -> C:
         ...
 
-    async def execute(self: C, sql: str, *parameters: Any) -> C:
+    async def execute(self: C, sql: str, /, *parameters: Any) -> C:
         """Asynchronous version of :meth:`sqlite3.Cursor.execute`."""
         if len(parameters) == 1 and isinstance(parameters[0], (dict, tuple)):
             parameters = parameters[0]  # type: ignore
@@ -390,18 +390,18 @@ class Connection:
         self._queue.stop()
 
     @overload
-    def execute(self, sql: str, parameter: Dict[str, Any]) -> _ContextManagerMixin[sqlite3.Cursor, Cursor]:
+    def execute(self, sql: str, parameter: Dict[str, Any], /) -> _ContextManagerMixin[sqlite3.Cursor, Cursor]:
         ...
 
     @overload
-    def execute(self, sql: str, parameter: Tuple[Any, ...]) -> _ContextManagerMixin[sqlite3.Cursor, Cursor]:
+    def execute(self, sql: str, parameter: Tuple[Any, ...], /) -> _ContextManagerMixin[sqlite3.Cursor, Cursor]:
         ...
 
     @overload
-    def execute(self, sql: str, *parameters: Any) -> _ContextManagerMixin[sqlite3.Cursor, Cursor]:
+    def execute(self, sql: str, /, *parameters: Any) -> _ContextManagerMixin[sqlite3.Cursor, Cursor]:
         ...
 
-    def execute(self, sql: str, *parameters: Any) -> _ContextManagerMixin[sqlite3.Cursor, Cursor]:
+    def execute(self, sql: str, /, *parameters: Any) -> _ContextManagerMixin[sqlite3.Cursor, Cursor]:
         """Asynchronous version of :meth:`sqlite3.Connection.execute`.
 
         Note that this returns a :class:`Cursor` instead of a :class:`sqlite3.Cursor`.
@@ -439,11 +439,11 @@ class Connection:
         return _ContextManagerMixin(self._queue, factory, self._conn.executescript, sql_script)
 
     @overload
-    async def fetchone(self, query: str, parameter: Dict[str, Any]) -> sqlite3.Row:
+    async def fetchone(self, query: str, parameter: Dict[str, Any], /) -> sqlite3.Row:
         ...
 
     @overload
-    async def fetchone(self, query: str, parameter: Tuple[Any, ...]) -> sqlite3.Row:
+    async def fetchone(self, query: str, parameter: Tuple[Any, ...], /) -> sqlite3.Row:
         ...
 
     @overload
@@ -456,35 +456,35 @@ class Connection:
             return await cursor.fetchone()
 
     @overload
-    async def fetchmany(self, query: str, parameter: Dict[str, Any], *, size: Optional[int] = None) -> List[sqlite3.Row]:
+    async def fetchmany(self, query: str, parameter: Dict[str, Any], /, *, size: Optional[int] = None) -> List[sqlite3.Row]:
         ...
 
     @overload
-    async def fetchmany(self, query: str, parameter: Tuple[Any, ...], *, size: Optional[int] = None) -> List[sqlite3.Row]:
+    async def fetchmany(self, query: str, parameter: Tuple[Any, ...], /, *, size: Optional[int] = None) -> List[sqlite3.Row]:
         ...
 
     @overload
-    async def fetchmany(self, query: str, *parameters: Any, size: Optional[int] = None) -> List[sqlite3.Row]:
+    async def fetchmany(self, query: str, /, *parameters: Any, size: Optional[int] = None) -> List[sqlite3.Row]:
         ...
 
-    async def fetchmany(self, query: str, *parameters: Any, size: Optional[int] = None) -> List[sqlite3.Row]:
+    async def fetchmany(self, query: str, /, *parameters: Any, size: Optional[int] = None) -> List[sqlite3.Row]:
         """Shortcut method version of :meth:`sqlite3.Cursor.fetchmany` without making a cursor."""
         async with self.execute(query, *parameters) as cursor:
             return await cursor.fetchmany(size)
 
     @overload
-    async def fetchall(self, query: str, parameter: Dict[str, Any]) -> List[sqlite3.Row]:
+    async def fetchall(self, query: str, parameter: Dict[str, Any], /) -> List[sqlite3.Row]:
         ...
 
     @overload
-    async def fetchall(self, query: str, parameter: Tuple[Any, ...]) -> List[sqlite3.Row]:
+    async def fetchall(self, query: str, parameter: Tuple[Any, ...], /) -> List[sqlite3.Row]:
         ...
 
     @overload
-    async def fetchall(self, query: str, *parameters: Any) -> List[sqlite3.Row]:
+    async def fetchall(self, query: str, /, *parameters: Any) -> List[sqlite3.Row]:
         ...
 
-    async def fetchall(self, query: str, *parameters: Any) -> List[sqlite3.Row]:
+    async def fetchall(self, query: str, /, *parameters: Any) -> List[sqlite3.Row]:
         """Shortcut method version of :meth:`sqlite3.Cursor.fetchall` without making a cursor."""
         async with self.execute(query, *parameters) as cursor:
             return await cursor.fetchall()
