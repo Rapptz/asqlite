@@ -50,7 +50,7 @@ from typing import (
 
 from types import TracebackType
 
-__version__ = '1.0.0'
+__version__ = '2.0.0a'
 
 PARSE_DECLTYPES = sqlite3.PARSE_DECLTYPES
 PARSE_COLNAMES = sqlite3.PARSE_COLNAMES
