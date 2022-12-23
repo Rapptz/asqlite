@@ -70,8 +70,12 @@ class _WorkerEntry:
 
 
 class _Worker(threading.Thread):
-    def __init__(self, *, loop: asyncio.AbstractEventLoop):
-        super().__init__(name='asqlite-worker-thread', daemon=True)
+    def __init__(self, *, loop: asyncio.AbstractEventLoop, index: Optional[int] = None):
+        name = 'asqlite-worker-thread'
+        if index is not None:
+            name = f'{name}-{index}'
+
+        super().__init__(name=name, daemon=True)
         self._loop = loop
         self._worker_queue: queue.Queue[_WorkerEntry] = queue.Queue()
         self._end = threading.Event()
@@ -116,7 +120,7 @@ class _ContextManagerMixin(Generic[T, U]):
         func: Callable[..., Any],
         *args: Any,
         timeout: Optional[float] = None,
-        **kwargs: Any
+        **kwargs: Any,
     ):
         self._worker: _Worker = _queue
         self.func: Callable[..., Any] = func
@@ -505,7 +509,7 @@ def connect(
     init: Optional[Callable[[sqlite3.Connection], None]] = None,
     timeout: Optional[float] = None,
     loop: Optional[asyncio.AbstractEventLoop] = None,
-    **kwargs: Any
+    **kwargs: Any,
 ) -> _ContextManagerMixin[sqlite3.Connection, Connection]:
     """asyncio-compatible version of :func:`sqlite3.connect`.
 
@@ -550,3 +554,308 @@ def connect(
         new_connect = _connect_pragmas  # type: ignore
 
     return _ContextManagerMixin(queue, factory, new_connect, database, timeout=timeout, **kwargs)
+
+
+class ProxiedConnection(Connection):
+    def __init__(self, pool: Pool, index: int, connection: sqlite3.Connection, queue: _Worker) -> None:
+        super().__init__(connection, queue)
+        self._pool: Pool = pool
+        self._index: int = index
+        self._in_use: Optional[asyncio.Future[None]] = None
+
+    async def close(self) -> None:
+        if self._in_use:
+            await self._pool.release(self)
+
+    async def wait_until_released(self) -> None:
+        if self._in_use:
+            await self._in_use
+
+
+class _AcquireProxyContextManager:
+    def __init__(self, pool: Pool) -> None:
+        self._pool: Pool = pool
+        self._connection: Optional[ProxiedConnection] = None
+
+    async def __aenter__(self) -> ProxiedConnection:
+        self._connection = await self._pool._acquire()
+        return self._connection
+
+    async def __aexit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> None:
+        if self._connection is not None:
+            await self._pool.release(self._connection)
+            self._connection = None
+
+    def __await__(self) -> Generator[Any, None, ProxiedConnection]:
+        return self._pool._acquire().__await__()
+
+
+class Pool:
+    """A connection pool.
+
+    Connection pools can be used to manage multiple connections to the database to allow for greater concurrency.
+    Connections are first acquired from the pool, used, and then finally released back into the pool.
+
+    Pools are created using :func:`create_pool`.
+
+    They function similarly to ``asyncpg.Pool`` and ``asyncpg.create_pool``.
+
+    .. versionadded:: 2.0
+    """
+
+    def __init__(self, workers: List[_Worker], connections: List[ProxiedConnection]) -> None:
+        self._workers: List[_Worker] = workers
+        self._connections: List[ProxiedConnection] = connections
+        self._queue: asyncio.LifoQueue[ProxiedConnection] = asyncio.LifoQueue(maxsize=len(workers))
+        self._loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
+        self._closing: bool = False
+        self._closed: bool = False
+
+    @classmethod
+    async def _create(
+        cls,
+        database: Union[str, bytes],
+        size: int,
+        init: Optional[Callable[[sqlite3.Connection], None]],
+        **kwargs: Any,
+    ) -> Pool:
+
+        loop = asyncio.get_running_loop()
+        workers: List[_Worker] = [_Worker(loop=loop, index=i + 1) for i in range(size)]
+        for worker in workers:
+            worker.start()
+
+        connections: List[ProxiedConnection] = []
+
+        pool = cls(workers, connections)
+        if init is not None:
+
+            def new_connect(db: Union[str, bytes], **kwargs: Any) -> sqlite3.Connection:
+                con = _connect_pragmas(db, **kwargs)
+                init(con)
+                return con
+
+        else:
+            new_connect = _connect_pragmas  # type: ignore
+
+        for index, worker in enumerate(workers):
+            connection = await worker.post(new_connect, database, **kwargs)
+            connections.append(ProxiedConnection(pool, index, connection, worker))
+
+        for connection in connections:
+            pool._queue.put_nowait(connection)
+
+        return pool
+
+    async def __aenter__(self) -> Pool:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> None:
+        await self.close()
+
+    async def _acquire(self) -> ProxiedConnection:
+        if self._closing:
+            raise sqlite3.ProgrammingError('Pool is closing')
+
+        if self._closed:
+            raise sqlite3.ProgrammingError('Pool is closed')
+
+        connection = await self._queue.get()
+        connection._in_use = self._loop.create_future()
+        return connection
+
+    def acquire(self) -> _AcquireProxyContextManager:
+        """Acquires a connection from the pool.
+
+        This can be used as a regular coroutine or in an async-with statement.
+
+        For example, both are equivalent:
+
+        .. code-block:: python
+
+            async with pool.acquire() as conn:
+                await conn.execute(...)
+
+        Or:
+
+        .. code-block:: python
+
+            conn = await pool.acquire()
+            try:
+                await conn.execute(...)
+            finally:
+                await pool.release(conn)
+
+        """
+        return _AcquireProxyContextManager(self)
+
+    async def release(self, connection: ProxiedConnection) -> None:
+        """Releases a connection back into the pool.
+
+        Parameters
+        -----------
+        connection: :class:`ProxiedConnection`
+            The connection to release back into the pool.
+            This must be a connection that *belongs* to the pool.
+
+        Raises
+        -------
+        sqlite3.ProgrammingError
+            The connection is not a proxied connection from the pool or
+            does not belong to this pool.
+        """
+
+        if type(connection) is not ProxiedConnection:
+            raise sqlite3.ProgrammingError('Expected a proxied connection from the pool.')
+
+        if connection._pool is not self:
+            raise sqlite3.ProgrammingError('The connection does not belong to this pool.')
+
+        # Already released
+        if connection._in_use is None:
+            return
+
+        if not connection._in_use.done():
+            connection._in_use.set_result(None)
+
+        connection._in_use = None
+        self._queue.put_nowait(connection)
+
+    async def close(self) -> None:
+        """Attempts to gracefully close the connection pool and all connections in the pool.
+
+        This will wait for all connections to be released back into the pool before closing.
+        If any error happens during the wait, then the pool will be forcefully closed using
+        :meth:`Pool.terminate`.
+        """
+
+        if self._closed:
+            return
+
+        self._closing = True
+
+        # Maybe warn on close taking too long?
+        try:
+            wait_for_release = [connection.wait_until_released() for connection in self._connections]
+            await asyncio.gather(*wait_for_release)
+
+            close_all = [connection.close() for connection in self._connections]
+            await asyncio.gather(*close_all)
+        except (Exception, asyncio.CancelledError):
+            await self.terminate()
+            raise
+        else:
+            for worker in self._workers:
+                worker.stop()
+        finally:
+            self._closed = True
+            self._closing = False
+
+    async def terminate(self) -> None:
+        """Forcefully terminate all connections in the pool."""
+
+        if self._closed:
+            return
+
+        close_all = [connection.close() for connection in self._connections]
+        await asyncio.gather(*close_all)
+
+        for worker in self._workers:
+            worker.stop()
+
+        self._closed = True
+        self._closing = False
+
+
+class PoolContextManager:
+    def __init__(
+        self,
+        database: Union[str, bytes],
+        *,
+        size: int = 10,
+        init: Optional[Callable[[sqlite3.Connection], None]] = None,
+        **kwargs: Any,
+    ):
+        self.__database: Union[str, bytes] = database
+        self.__size: int = size
+        self.__init: Optional[Callable[[sqlite3.Connection], None]] = init
+        self.__kwargs: Dict[str, Any] = kwargs
+        self.__result: Optional[Pool] = None
+
+    async def _runner(self) -> Pool:
+        self.__result = await Pool._create(self.__database, self.__size, self.__init, **self.__kwargs)
+        return self.__result
+
+    def __await__(self) -> Generator[Any, None, Pool]:
+        return self._runner().__await__()
+
+    async def __aenter__(self) -> Pool:
+        ret = await self._runner()
+        return await ret.__aenter__()
+
+    async def __aexit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> None:
+        if self.__result is not None:
+            await self.__result.__aexit__(exc_type, exc_value, traceback)
+
+
+def create_pool(
+    database: Union[str, bytes],
+    *,
+    init: Optional[Callable[[sqlite3.Connection], None]] = None,
+    size: int = 10,
+    **kwargs: Any,
+) -> PoolContextManager:
+    r"""Creates a connection pool.
+
+    This can be used as a regular coroutine or in an async-with statement.
+
+    For example, both are equivalent:
+
+    .. code-block:: python3
+
+        conn = await create_pool(":memory:")
+        try:
+            ...
+        finally:
+            await conn.close()
+
+    .. code-block:: python3
+
+        async with create_pool(":memory:") as pool:
+            ...
+
+    Resolves to a :class:`Pool` object.
+
+    A special keyword-only parameter named ``init`` can be passed which allows
+    one to customize the :class:`sqlite3.Connection` before it is converted
+    to a :class:`Connection` object when managed by the pool.
+
+    Parameters
+    -----------
+    database: Union[:class:`str`, :class:`bytes`]
+        The database to connect to. This can be a path to a file or ``:memory:`` for an in-memory database.
+    init: Optional[Callable[[:class:`sqlite3.Connection`], None]]
+        A function that is called to customise the connection before it is used by the pool.
+    size: :class:`int`
+        The number of connections to initialise the pool with. Note that this creates 1 daemon thread per connection.
+        Defaults to 10.
+    \*\*kwargs: Any
+        Any additional keyword arguments are passed to :func:`sqlite3.connect`.
+    """
+
+    return PoolContextManager(database, init=init, size=size, **kwargs)
