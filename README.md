@@ -33,7 +33,7 @@ This module differs from `sqlite3` in a few ways:
 3. [Implicit transactions are turned off][implicit-transactions]
 4. The [`row_factory`][row_factory] is set to [`sqlite3.Row`][Row].
 
-[implicit-transactions]: https://docs.python.org/3/library/sqlite3.html#controlling-transactions
+[implicit-transactions]: https://docs.python.org/3/library/sqlite3.html#transaction-control
 [row_factory]: https://docs.python.org/3/library/sqlite3.html#sqlite3.Connection.row_factory
 [Row]: https://docs.python.org/3/library/sqlite3.html#sqlite3.Row
 
