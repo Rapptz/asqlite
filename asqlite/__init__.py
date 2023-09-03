@@ -571,6 +571,9 @@ class ProxiedConnection(Connection):
         if self._in_use:
             await self._in_use
 
+    async def _force_close(self) -> None:
+        await super().close()
+
 
 class _AcquireProxyContextManager:
     def __init__(self, pool: Pool) -> None:
@@ -749,7 +752,7 @@ class Pool:
             wait_for_release = [connection.wait_until_released() for connection in self._connections]
             await asyncio.gather(*wait_for_release)
 
-            close_all = [connection.close() for connection in self._connections]
+            close_all = [connection._force_close() for connection in self._connections]
             await asyncio.gather(*close_all)
         except (Exception, asyncio.CancelledError):
             await self.terminate()
@@ -767,7 +770,7 @@ class Pool:
         if self._closed:
             return
 
-        close_all = [connection.close() for connection in self._connections]
+        close_all = [connection._force_close() for connection in self._connections]
         await asyncio.gather(*close_all)
 
         for worker in self._workers:
