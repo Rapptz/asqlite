@@ -224,7 +224,7 @@ class Cursor:
         await self._post(self._cursor.executescript, sql_script)
         return self
 
-    async def fetchone(self) -> sqlite3.Row:
+    async def fetchone(self) -> Optional[sqlite3.Row]:
         """Asynchronous version of :meth:`sqlite3.Cursor.fetchone`."""
         return await self._post(self._cursor.fetchone)
 
@@ -443,18 +443,18 @@ class Connection:
         return _ContextManagerMixin(self._queue, factory, self._conn.executescript, sql_script)
 
     @overload
-    async def fetchone(self, query: str, parameter: Dict[str, Any], /) -> sqlite3.Row:
+    async def fetchone(self, query: str, parameter: Dict[str, Any], /) -> Optional[sqlite3.Row]:
         ...
 
     @overload
-    async def fetchone(self, query: str, parameter: Tuple[Any, ...], /) -> sqlite3.Row:
+    async def fetchone(self, query: str, parameter: Tuple[Any, ...], /) -> Optional[sqlite3.Row]:
         ...
 
     @overload
-    async def fetchone(self, query: str, *parameters: Any) -> sqlite3.Row:
+    async def fetchone(self, query: str, *parameters: Any) -> Optional[sqlite3.Row]:
         ...
 
-    async def fetchone(self, query: str, *parameters: Any) -> sqlite3.Row:
+    async def fetchone(self, query: str, *parameters: Any) -> Optional[sqlite3.Row]:
         """Shortcut method version of :meth:`sqlite3.Cursor.fetchone` without making a cursor."""
         async with self.execute(query, *parameters) as cursor:
             return await cursor.fetchone()
