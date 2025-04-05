@@ -41,6 +41,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Sequence,
     Tuple,
     Type,
     TypeVar,
@@ -200,7 +201,7 @@ class Cursor:
         ...
 
     @overload
-    async def execute(self: C, sql: str, parameter: Tuple[Any, ...], /) -> C:
+    async def execute(self: C, sql: str, parameter: Sequence, /) -> C:
         ...
 
     @overload
@@ -209,7 +210,7 @@ class Cursor:
 
     async def execute(self: C, sql: str, /, *parameters: Any) -> C:
         """Asynchronous version of :meth:`sqlite3.Cursor.execute`."""
-        if len(parameters) == 1 and isinstance(parameters[0], (dict, tuple)):
+        if len(parameters) == 1 and isinstance(parameters[0], (dict, Sequence)):
             parameters = parameters[0]  # type: ignore
         await self._post(self._cursor.execute, sql, parameters)
         return self
@@ -398,7 +399,7 @@ class Connection:
         ...
 
     @overload
-    def execute(self, sql: str, parameter: Tuple[Any, ...], /) -> _ContextManagerMixin[sqlite3.Cursor, Cursor]:
+    def execute(self, sql: str, parameter: Sequence, /) -> _ContextManagerMixin[sqlite3.Cursor, Cursor]:
         ...
 
     @overload
@@ -410,7 +411,7 @@ class Connection:
 
         Note that this returns a :class:`Cursor` instead of a :class:`sqlite3.Cursor`.
         """
-        if len(parameters) == 1 and isinstance(parameters[0], (dict, tuple)):
+        if len(parameters) == 1 and isinstance(parameters[0], (dict, Sequence)):
             parameters = parameters[0]  # type: ignore
 
         def factory(cur: sqlite3.Cursor):
